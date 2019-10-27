@@ -1,3 +1,4 @@
+; vim: syntax=assembly
 ;Zero page pointers
 zero_page_pointer_0 = $fb
 
