@@ -1,0 +1,498 @@
+;Zero page pointers
+zero_page_pointer_0 = $fb
+
+*=$0801
+;Loader program in basic
+;2019 SYS4096
+!byte $0B, $08           ;Pointer to the next basic line
+!byte $13, $14           ;Line number 2019
+!byte $9e                ;SYS token
+!byte $34, $30, $39, $36 ;"4096" ascii encoded
+!byte $00                ;end of line
+!byte $00, $00           ;End of program (null next line pointer)
+
+;Actual program starts here
+*=$1000
+;Setup program
+    jsr sub_screen_clear
+    jsr sub_screen_set_color
+    jsr sub_canvas_set_color
+    jsr sub_screen_draw_vertical_border
+    jsr sub_screen_draw_logo
+    jsr sub_screen_draw_hex_all
+    jsr sub_sprite_setup
+;Setup irq
+    sei                 ;Disable interupts for now
+    lda #%01111111      ;Disable CIA-1 interupts
+    sta $dc0d
+    and $d011           ;Clear the most significant vic irq bit
+    sta $d011
+    lda #$00            ;Set at which line should the irq happen
+    sta $d012
+    lda #<irq           ;Set the interupt vector
+    sta $0314
+    lda #>irq
+    sta $0315
+    lda #%00000001      ;Enable raster interupts at vic
+    sta $d01a
+    cli                 ;Reenable interupts
+;Done with setup, wait for interupts
+    jmp *               ;Do nothing
+
+;IRQ
+irq
+    asl $d019           ;Acknowledge the interupt
+    jsr sub_main_loop
+    jmp $ea31           ;Rune kernal interupt handler
+;End irq
+
+;Run every frame
+sub_main_loop
+    jsr sub_cursor_save
+    jsr sub_cursor_joystick
+    jsr sub_canvas_restore
+    jsr sub_canvas_cursor
+    rts
+;END main_loop
+
+;Clear screen and set BG to black
+sub_screen_clear
+    lda #$60           ;Blank screen code
+    ldx #$00
+-   sta $0400, x       ;Clear screen
+    sta $0500, x
+    sta $0600, x
+    sta $0700, x
+    dex                ;Decrament x
+    bne -              ;Keep clearing until reached $00 again
+    rts
+;END clear_screen
+
+;Draw the vertical border on the screen
+sub_screen_draw_vertical_border
+    lda #3                        ;The starting line - 1
+-   clc
+    adc #1
+    pha
+    asl                           ;Multiply by two
+    tax
+    lda lut_screen_line, x        ;Fetch the line location from lut
+    sta zero_page_pointer_0
+    inx
+    lda lut_screen_line, x
+    sta zero_page_pointer_0 + 1
+    ldy #24                       ;Column index to draw at
+    lda #0
+    lda #$e0                      ;Character to draw
+    sta (zero_page_pointer_0), y
+    pla
+    cmp #24                       ;Done on 25th line
+    bne -
+    rts
+;END screen_draw_vertical_border
+
+;Draw the top logo on the screen
+sub_screen_draw_logo
+    lda #160                 ;Screen code count
+-   tax
+    dex
+    lda const_screen_logo, x
+    sta $0400, x
+    txa
+    cmp #$00
+    bne -                    ;until zero reached
+    rts
+;END screen_draW_logo
+
+;Set the color of the screen
+sub_screen_set_color
+    lda #$02           ;Screen color
+    sta $d020          ;VIC REG - Border color
+    ldx #$00           ;Index/BG Color
+    stx $d021          ;VIC REG - BG Color 0
+-   sta $d800, x       ;Set fg color
+    sta $d900, x
+    sta $da00, x
+    sta $db00, x
+    dex                ;Decrament x
+    bne -              ;Keep clearing until reached $00 again
+    rts
+;END screen_set_color
+
+;Draws all of the hex bytes on screen
+sub_screen_draw_hex_all
+    ldy #$00           ;Starting row
+--  tya
+    pha
+    ldx #$00
+-   pla
+    tay
+    pha
+    txa
+    pha
+    jsr sub_screen_draw_hex_byte
+    pla
+    clc
+    adc #1
+    tax
+    cmp #3
+    bne -
+    pla
+    clc
+    adc #1
+    tay
+    cmp #21            ;Lines
+    bne --
+    rts
+;END screen_draw_hex_all
+
+;Draws sprite content byte as hex on screen for bytes at x and y
+sub_screen_draw_hex_byte
+    txa                                 ;Be sure not to lose the coordinates
+    pha
+    tya
+    pha
+    clc
+    adc #4                              ;Offset line to match with the canvas
+    asl                                 ;Multiply by two to look up in lut
+    tax                                 ;Continue with regular screen location lookup
+    lda lut_screen_line, x
+    sta zero_page_pointer_0
+    inx
+    lda lut_screen_line, x
+    sta zero_page_pointer_0+1
+    pla                                 ;Restore locations
+    tay
+    pla
+    tax
+    sta var_tmp
+    lda lut_sprite_line_offset, y       ;Look up sprite byte
+    clc
+    adc var_tmp
+    tay
+    lda const_sprites_mem, y
+    pha                                 ;Store for later
+    txa                                 ;multiply 2x + x = 3x
+    asl
+    sta var_tmp
+    txa
+    clc
+    adc var_tmp
+    adc #25                             ;Rendering offset
+    tay
+    pla                                 ;Get it and save it again
+    pha
+    lsr                                 ;Get the most significan nibble
+    lsr
+    lsr
+    lsr
+    tax                                 ;Get the screen code
+    lda lut_hex_nibble_screen_codes, x 
+    sta (zero_page_pointer_0), y        ;Print
+    iny
+    pla                                 ;Get the most significant nibble
+    and #%00001111
+    tax
+    lda lut_hex_nibble_screen_codes, x
+    sta (zero_page_pointer_0), y
+    rts
+;END screen_draw_hex
+
+;Save cursors previous location
+sub_cursor_save
+    lda var_cursor_x
+    sta var_cursor_prev_x
+    lda var_cursor_y
+    sta var_cursor_prev_y
+    rts
+;END cursor_save
+
+;Handle joystick input on port 2
+sub_cursor_joystick
+    lda #$00
+    cmp var_cursor_cooldown
+    beq +                   ;If no cooldown process input
+    dec var_cursor_cooldown
+    jmp ++
+
++   ;UP
+    lda #%00000001 ;Load direction mask
+    bit $dc00      ;Test if it's pressed down
+    bne +          ;If not skip instructions
+    dec var_cursor_y
+    jsr sub_cursor_moved
+
++   ;DOWN
+    lda #%00000010
+    bit $dc00
+    bne +
+    inc var_cursor_y
+    jsr sub_cursor_moved
+
++   ;LEFT
+    lda #%00000100
+    bit $dc00
+    bne +
+    dec var_cursor_x
+    jsr sub_cursor_moved
+
++   ;RIGHT
+    lda #%00001000
+    bit $dc00
+    bne +
+    inc var_cursor_x
+    jsr sub_cursor_moved
+
+++
++   ;FIRE
+    jsr sub_cursor_limit
++   lda #%00010000
+    bit $dc00
+    bne +
+    lda #$01                   ;Check if debounce is active
+    cmp var_plotting_debounce
+    beq ++
+    jsr sub_cursor_plot        ;Otherwise plot
+    lda #$01                   ;And enable debounce
+    sta var_plotting_debounce
+    jmp ++
++   lda #$00                   ;If button wasn't pressed disable debounce
+    sta var_plotting_debounce
+++  rts
+;END handle_joystick
+
+;Does everything that has to be done when plotting to screen
+sub_cursor_plot
+    ldx var_cursor_x           
+    ldy var_cursor_y
+    jsr sub_sprite_toggle_pixel
+
+    lda var_cursor_x                ;calculate which byte will be changed aka div by 3
+    ldx #0
+    ldy var_cursor_y
+    cmp #8
+    bmi ++
+    cmp #16
+    bmi +
+    inx
++   inx
+++  jsr sub_screen_draw_hex_byte
+    rts
+;END cursor_plot
+
+;Utilities ran after cursor moved involving debounce and cooldown
+sub_cursor_moved
+    lda #const_cursor_cooldown_time ;Set up cursor cooldown
+    sta var_cursor_cooldown
+    lda #$00                        ;Disable plotting debounce
+    sta var_plotting_debounce
+    rts
+;end cursor_moved
+
+;Make sure cursor doesn't go out of bounds
+sub_cursor_limit
+    lda #24          ;24 columns
+    cmp var_cursor_x
+    bne +
+    lda #0           ;Warp
+    sta var_cursor_x
++   lda #$ff         ;Opposite direction
+    cmp var_cursor_x
+    bne +
+    lda #23          ;Warp
+    sta var_cursor_x
+
++   lda #21          ;21 rows
+    cmp var_cursor_y
+    bne +
+    lda #0           ;Warp
+    sta var_cursor_y
++   lda #$ff         ;Opposite direction
+    cmp var_cursor_y
+    bne +
+    lda #20          ;Warp
+    sta var_cursor_y
++   rts
+;END limit_cursor
+
+;Restores previous cursor location
+sub_canvas_restore
+    ldx var_cursor_prev_x     ;Look up the pixel on the sprite itself
+    ldy var_cursor_prev_y
+    jsr sub_sprite_get_pixel
+    cmp #$01
+    beq +
+    lda #$60                  ;Empty
+    jmp ++
++   lda #$e0                  ;Filled
+++  ldx var_cursor_prev_x     ;Plot the respective character
+    ldy var_cursor_prev_y
+    jsr sub_canvas_plot   
+    rts
+;END canvas_restore
+
+;Draws cursor on canvas
+sub_canvas_cursor
+    ldx var_cursor_x     ;Look up the pixel on the sprite itself
+    ldy var_cursor_y
+    jsr sub_sprite_get_pixel
+    cmp #$01
+    beq +
+    lda #$57                  ;Empty
+    jmp ++
++   lda #$d7                  ;Filled
+++  ldx var_cursor_x
+    ldy var_cursor_y
+    jsr sub_canvas_plot
+    rts
+;END canvas_cursor
+
+;Sets the color of canvas
+sub_canvas_set_color
+    lda #4                   ;First line
+--  pha                      ;Save for later
+    asl                      ;Multiply by two
+    tax
+    lda lut_color_line, x
+    sta zero_page_pointer_0
+    inx
+    lda lut_color_line, x
+    sta zero_page_pointer_0+1
+    ldy #$ff                ;First column - 1
+-   iny
+    lda #$01                ;Color
+    sta (zero_page_pointer_0),y
+    tya
+    cmp #23                 ;Last column
+    bne -
+    pla
+    clc
+    adc #1
+    cmp #25                 ;Last line
+    bne --
+    rts
+;END canvas_set_color
+
+;Plots a screen code in register A on canvas at X, Y register locations
+sub_canvas_plot
+    pha                      ;Save A for later move y to a and x to y
+    iny                      ;Shift canvas down a bit
+    iny
+    iny
+    iny
+    tya                      ;Confusing, but required for addressing modes to work
+    pha
+    txa
+    tay
+    pla
+    asl                      ;Multiply y by 2
+    tax
+    lda lut_screen_line, x   ;Move line location to a pointer
+    sta zero_page_pointer_0
+    inx
+    lda lut_screen_line, x
+    sta zero_page_pointer_0+1
+    pla                      ;Screen code to draw
+    sta (zero_page_pointer_0), y      
+    rts
+;END canvas_plot
+
+;Sets up sprite preview
+sub_sprite_setup
+    lda #const_sprites_vic ;Get the sprite location in VIC friendly way
+    sta $07f8              ;Tell VIC where the sprite is
+    lda #$01               ;Sprite enable flags
+    sta $d015              ;Tell VIC to enable sprite
+    sta $d027              ;Set sprite color
+    lda #$30               ;Position sprite
+    sta $d000
+    lda #$60
+    sta $d001
+    lda #$01
+    sta $d010
+    rts
+;END setup_sprite
+
+;Find pixel data at x any y registers on sprite
+sub_sprite_get_pixel
+    lda lut_sprite_line_offset, y ;Find line offset in the lookup table
+    tay
+    txa                           ;Find total byte offset, store it in y
+-   cmp #$08                      ;and find bit offset and store it in x
+    bmi +
+    sbc #$08
+    iny
+    jmp -
++   tax             
+    lda const_sprites_mem, y      ;Fetch the byte this pixel is in from sprite
+    inx                           ;Find the pixel bit in the byte
+    inx
+-   rol
+    dex
+    bne -
+    and #%00000001                ;Clear the other bits
+    rts
+;END sprite_get_pixel
+
+;Toggle a pixel on sprite at X and Y
+sub_sprite_toggle_pixel
+    lda lut_sprite_line_offset, y ;Find line offset in the lookup table
+    tay
+    txa                           ;Find total byte offset, store it in y
+-   cmp #$08                      ;and find bit offset and store it in x
+    bmi +
+    sbc #$08
+    iny
+    jmp -
++   tax             
+    lda #$01
+    inx                           ;Find the pixel bit in the byte
+    inx
+-   ror
+    dex
+    bne -
+    eor const_sprites_mem, y      ;Toggle the pixel
+    sta const_sprites_mem, y
+    rts
+;END sprite_set_pixel
+
+;Variables
+var_tmp !byte 0
+var_cursor_cooldown !byte 0
+var_plotting_debounce !byte 0
+var_cursor_prev_x !byte 0
+var_cursor_prev_y !byte 0
+var_cursor_x !byte 0
+var_cursor_y !byte 0
+
+;Screen line LUT
+lut_screen_line !for I, 0, 24 {
+  !word $0400 + 40*I
+}
+;Screen color line LUT
+lut_color_line !for I, 0, 24 {
+  !word $d800 + 40*I
+}
+;Sprite line offset LUT
+lut_sprite_line_offset !for I, 0, 20 {
+  !byte I*3
+}
+
+lut_hex_nibble_screen_codes
+!byte $30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$01,$02,$03,$04,$05,$06
+;      0   1   2   3   4   5   6   7   8   9   a   b   c   d   e   f
+
+;Constants
+const_sprites_mem = $2000
+const_sprites_vic = $2000/64
+const_cursor_cooldown_time = 3
+
+const_screen_logo ;Logo in form of direct screen codes to allow me to do some pretty art
+!byte $e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0
+!byte $e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$93,$90,$92,$85,$84,$89,$94,$a1,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0
+!byte $e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$96,$b0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0
+!byte $e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0
+;                                                                      S   P   R   E   D   I   T   !
+;                                                                                  V   0
+
+*=$2000 ;To get warnings if we are encroaching on sprite space
