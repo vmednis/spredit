@@ -683,7 +683,7 @@ var_cursor_prev_y !byte 0
 var_cursor_x !byte 0
 var_cursor_y !byte 0
 var_color_bg !byte 0
-var_color_bd !byte 2
+var_color_bd !byte $0b
 var_color_fg !byte 1
 var_keyboard_debounce_f !byte 0
 var_keyboard_debounce_b !byte 0
