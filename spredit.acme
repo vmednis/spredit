@@ -21,6 +21,7 @@ zero_page_pointer_0 = $fb
     jsr sub_screen_draw_vertical_border
     jsr sub_screen_draw_logo
     jsr sub_screen_draw_hex_all
+    jsr sub_screen_draw_signature
     jsr sub_sprite_setup
 ;Setup irq
     sei                 ;Disable interupts for now
@@ -51,10 +52,104 @@ irq
 sub_main_loop
     jsr sub_cursor_save
     jsr sub_cursor_joystick
+    jsr sub_keyboard_read
     jsr sub_canvas_restore
     jsr sub_canvas_cursor
     rts
 ;END main_loop
+
+;Reads keyboard
+sub_keyboard_read
+    lda $dc02       ;Save cia directions, probably not necessary
+    pha             ;but just in case we want to reverty to kernal
+    lda $dc03       ;input later...
+    pha
+    lda #$ff        ;Set the port directions
+    sta $dc02
+    lda #$00
+    sta $dc03
+
+    lda #%11111011  ;Query for F and D
+    sta $dc00
+    ;F
+    lda #%00100000
+    bit $dc01
+    bne +           
+
+    lda var_keyboard_debounce_f
+    cmp #0
+    bne ++
+
+    inc var_color_fg
+    jsr sub_keyboard_change_color
+
+    lda #1
+    sta var_keyboard_debounce_f
+    jmp ++
++   lda #0
+    sta var_keyboard_debounce_f
+
+    ;D
+++  lda #%00000100
+    bit $dc01
+    bne +
+
+    lda var_keyboard_debounce_d
+    cmp #0
+    bne ++
+
+    inc var_color_bd
+    jsr sub_keyboard_change_color
+
+    lda #1
+    sta var_keyboard_debounce_d
+    jmp ++
++   lda #0
+    sta var_keyboard_debounce_d
+
+++  lda #%11110111  ;Query for B
+    sta $dc00
+    ;B
+    lda #%00010000
+    bit $dc01
+    bne +
+
+    lda var_keyboard_debounce_b
+    cmp #0
+    bne ++
+
+    inc var_color_bg
+    jsr sub_keyboard_change_color
+
+    lda #1
+    sta var_keyboard_debounce_b
+    jmp ++
++   lda #0
+    sta var_keyboard_debounce_b
+
+++  pla             ;Restore cia directions
+    sta $dc03
+    pla
+    sta $dc02
+    rts
+;END keyboard_read
+
+;Done after every color change key
+sub_keyboard_change_color
+    lda #$0f
+    and var_color_bg
+    sta var_color_bg
+    lda #$0f
+    and var_color_bd
+    sta var_color_bd
+    lda #$0f
+    and var_color_fg
+    sta var_color_fg
+    jsr sub_screen_set_color
+    jsr sub_canvas_set_color
+    jsr sub_sprite_setup
+    rts
+;END keyb0ard_change_color
 
 ;Clear screen and set BG to black
 sub_screen_clear
@@ -105,12 +200,34 @@ sub_screen_draw_logo
     rts
 ;END screen_draW_logo
 
+;Draw signature
+sub_screen_draw_signature
+    lda #$b9                        ;Location on screen
+    sta zero_page_pointer_0
+    lda #$07
+    sta zero_page_pointer_0+1
+    ldy #$6
+-   lda const_signature, y
+    sta (zero_page_pointer_0),y
+    dey
+    bpl -
+    lda #$e4                        ;Location on screen
+    sta zero_page_pointer_0
+    ldy #$3
+-   lda const_signature+7, y
+    sta (zero_page_pointer_0),y
+    dey
+    bpl -
+    rts
+;END screen_draw_signature
+
 ;Set the color of the screen
 sub_screen_set_color
-    lda #$02           ;Screen color
+    ldx #$00
+    lda var_color_bg   ;Index/BG Color
+    sta $d021          ;VIC REG - BG Color 0
+    lda var_color_bd   ;Screen color
     sta $d020          ;VIC REG - Border color
-    ldx #$00           ;Index/BG Color
-    stx $d021          ;VIC REG - BG Color 0
 -   sta $d800, x       ;Set fg color
     sta $d900, x
     sta $da00, x
@@ -361,7 +478,7 @@ sub_canvas_set_color
     sta zero_page_pointer_0+1
     ldy #$ff                ;First column - 1
 -   iny
-    lda #$01                ;Color
+    lda var_color_fg        ;Color
     sta (zero_page_pointer_0),y
     tya
     cmp #23                 ;Last column
@@ -404,6 +521,7 @@ sub_sprite_setup
     sta $07f8              ;Tell VIC where the sprite is
     lda #$01               ;Sprite enable flags
     sta $d015              ;Tell VIC to enable sprite
+    lda var_color_fg
     sta $d027              ;Set sprite color
     lda #$30               ;Position sprite
     sta $d000
@@ -459,12 +577,20 @@ sub_sprite_toggle_pixel
 
 ;Variables
 var_tmp !byte 0
-var_cursor_cooldown !byte 0
 var_plotting_debounce !byte 0
+var_cursor_cooldown !byte 0
 var_cursor_prev_x !byte 0
 var_cursor_prev_y !byte 0
 var_cursor_x !byte 0
 var_cursor_y !byte 0
+var_color_bg !byte 0
+var_color_bd !byte 2
+var_color_fg !byte 1
+var_keyboard_debounce_f !byte 0
+var_keyboard_debounce_b !byte 0
+var_keyboard_debounce_d !byte 0
+
+
 
 ;Screen line LUT
 lut_screen_line !for I, 0, 24 {
@@ -488,12 +614,16 @@ const_sprites_mem = $2000
 const_sprites_vic = $2000/64
 const_cursor_cooldown_time = 3
 
+const_signature
+!byte $16,$0d,$05,$04,$0e,$09,$13
+!byte             $32,$30,$31,$39
+;      V   M   E   D   N   I   S
+;                  2   0   1   9
+
 const_screen_logo ;Logo in form of direct screen codes to allow me to do some pretty art
-!byte $e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0
-!byte $e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$93,$90,$92,$85,$84,$89,$94,$a1,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0
-!byte $e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$96,$b0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0
-!byte $e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0,$e0
-;                                                                      S   P   R   E   D   I   T   !
-;                                                                                  V   0
+!byte $a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$ec,$e2,$fb,$e2,$e2,$ec,$e2,$fb,$e2,$e2,$ec,$e2,$a0,$fb,$e2,$e2,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0
+!byte $a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$61,$e2,$fb,$7c,$7e,$61,$e2,$e1,$7c,$e2,$61,$a0,$e1,$e1,$e7,$f4,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0
+!byte $a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$e1,$e1,$a0,$61,$fc,$fb,$e1,$a0,$61,$a0,$e1,$e1,$e7,$f4,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0
+!byte $a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$fc,$62,$fe,$fe,$a0,$fc,$a0,$fe,$62,$62,$fc,$62,$fe,$fe,$fc,$fe,$96,$b1,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0,$a0;                                                                      S   P   R   E   D   I   T   !
 
 *=$2000 ;To get warnings if we are encroaching on sprite space
