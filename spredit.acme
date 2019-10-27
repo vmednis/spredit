@@ -21,6 +21,7 @@ zero_page_pointer_0 = $fb
     jsr sub_screen_draw_vertical_border
     jsr sub_screen_draw_logo
     jsr sub_screen_draw_hex_all
+    jsr sub_screen_draw_color_info
     jsr sub_screen_draw_signature
     jsr sub_sprite_setup
 ;Setup irq
@@ -148,6 +149,7 @@ sub_keyboard_change_color
     jsr sub_screen_set_color
     jsr sub_canvas_set_color
     jsr sub_sprite_setup
+    jsr sub_screen_draw_color_info
     rts
 ;END keyb0ard_change_color
 
@@ -199,6 +201,103 @@ sub_screen_draw_logo
     bne -                    ;until zero reached
     rts
 ;END screen_draW_logo
+
+;Draws color info on the screen
+sub_screen_draw_color_info
+    ;FG
+    lda #$f2                        ;Not a lot of text so doing it
+    sta zero_page_pointer_0         ;completely manually :)
+    lda #$06
+    sta zero_page_pointer_0+1
+    
+    ldy #$00                        ;First the label
+    lda #$06
+    sta (zero_page_pointer_0),y
+    iny
+    lda #$07
+    sta (zero_page_pointer_0),y
+    iny
+    iny
+
+    lda var_color_fg                ;Then most significant bit of the color
+    lsr                             ;Should always be 0, but in case of future
+    lsr                             ;changes doing it properly
+    lsr
+    lsr
+    tax
+    lda lut_hex_nibble_screen_codes,x
+    sta (zero_page_pointer_0),y
+    iny
+
+    lda #$0f                       ;Then the least significant bit gets shown
+    lda var_color_fg               ;Kinda funny how here it is more important
+    tax
+    lda lut_hex_nibble_screen_codes,x
+    sta (zero_page_pointer_0),y
+
+    ;BG
+    lda #$1a                        ;Not a lot of text so doing it
+    sta zero_page_pointer_0         ;completely manually :)
+    lda #$07
+    sta zero_page_pointer_0+1
+    
+    ldy #$00                        ;First the label
+    lda #$02
+    sta (zero_page_pointer_0),y
+    iny
+    lda #$07
+    sta (zero_page_pointer_0),y
+    iny
+    iny
+
+    lda var_color_bg                ;Then most significant bit of the color
+    lsr                             ;Should always be 0, but in case of future
+    lsr                             ;changes doing it properly
+    lsr
+    lsr
+    tax
+    lda lut_hex_nibble_screen_codes,x
+    sta (zero_page_pointer_0),y
+    iny
+
+    lda #$0f                       ;Then the least significant bit gets shown
+    lda var_color_bg               ;Kinda funny how here it is more important
+    tax
+    lda lut_hex_nibble_screen_codes,x
+    sta (zero_page_pointer_0),y
+
+    ;BD
+    lda #$42                        ;Not a lot of text so doing it
+    sta zero_page_pointer_0         ;completely manually :)
+    lda #$07
+    sta zero_page_pointer_0+1
+    
+    ldy #$00                        ;First the label
+    lda #$02
+    sta (zero_page_pointer_0),y
+    iny
+    lda #$04
+    sta (zero_page_pointer_0),y
+    iny
+    iny
+
+    lda var_color_bd                ;Then most significant bit of the color
+    lsr                             ;Should always be 0, but in case of future
+    lsr                             ;changes doing it properly
+    lsr
+    lsr
+    tax
+    lda lut_hex_nibble_screen_codes,x
+    sta (zero_page_pointer_0),y
+    iny
+
+    lda #$0f                       ;Then the least significant bit gets shown
+    lda var_color_bd               ;Kinda funny how here it is more important
+    tax
+    lda lut_hex_nibble_screen_codes,x
+    sta (zero_page_pointer_0),y
+    rts
+;END screen_draw_color_info
 
 ;Draw signature
 sub_screen_draw_signature
